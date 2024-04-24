@@ -1,0 +1,283 @@
+title: "Project1"
+author: "Yeyoung Kim"
+date: "2024-04-10"
+output: pdf_document
+---
+
+```{r 0}
+library(dplyr)
+library(ggplot2)
+
+# Read data
+dc <- read.csv("C:/Users/yeyou/OneDrive/Desktop/dallas_crimes.csv", header = TRUE, stringsAsFactors = FALSE)
+holidays <- read.csv("C:/Users/yeyou/OneDrive/Desktop/holidays.csv")
+
+# Clean data
+dc <- na.omit(dc)
+
+# Convert dates to Date objects
+dc$Arrest.Date <- as.Date(dc$Arrest.Date, "%m/%d/%Y")
+holidays$Date <- as.Date(holidays$Date, "%m/%d/%Y")
+
+# Identify holidays
+dc$IsHoliday <- ifelse(dc$Arrest.Date %in% holidays$Date, "Yes", "No")
+
+```
+
+
+```{r 1}
+#Overall#
+## Crime rates for holidays and non-holidays
+# Calculate total number of crimes for holidays and non-holidays
+total_crimes_holidays <- sum(dc$IsHoliday == "Yes")
+total_crimes_non_holidays <- sum(dc$IsHoliday == "No")
+
+# Calculate total number of holiday and non-holiday days
+total_days_holidays <- n_distinct(dc$Arrest.Date[dc$IsHoliday == "Yes"])
+total_days_non_holidays <- n_distinct(dc$Arrest.Date[dc$IsHoliday == "No"])
+
+# Calculate crime rates for holidays and non-holidays
+crime_rate_holidays <- total_crimes_holidays / total_days_holidays
+crime_rate_non_holidays <- total_crimes_non_holidays / total_days_non_holidays
+
+# Print crime rates for holidays and non-holidays
+print("Arrest rates for holidays:")
+print(crime_rate_holidays)
+print("Arrest rates for non-holidays:")
+print(crime_rate_non_holidays)
+# Create a bar plot to compare crime rates for holidays and non-holidays
+crime_rates <- data.frame(Type = c("Holidays", "Non-Holidays"),
+                          Rate = c(crime_rate_holidays, crime_rate_non_holidays))
+ggplot(crime_rates, aes(x = Type, y = Rate, fill = Type)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Crime Rates for Holidays and Non-Holidays",
+       x = "Day",
+       y = "Arrest Rate",
+       fill = "Type")
+###################################################################
+
+# Calculate average crime rate for non-holiday days
+average_crime_rate_non_holiday <- dc %>%
+  filter(IsHoliday == "No") %>%
+  summarise(average_crime_rate = n() / n_distinct(Arrest.Date))
+
+# Join holiday names with crime data
+dc_with_holidays <- dc %>%
+  left_join(holidays, by = c("Arrest.Date" = "Date"))
+
+# Calculate average crime rate for each holiday
+average_crime_rate_holiday <- dc_with_holidays %>%
+  filter(IsHoliday == "Yes") %>%
+  group_by(Name) %>%
+  summarise(average_crime_rate = n() / n_distinct(Arrest.Date)) %>%
+  ungroup() %>%
+  rename(Holiday = Name)
+
+# Combine average crime rates for holidays and non-holidays
+combined_crime_rates <- bind_rows(
+  average_crime_rate_holiday,
+  average_crime_rate_non_holiday %>% mutate(Holiday = "Non-Holiday")
+)
+
+# Define color palette
+color_palette <- c("Non-Holiday" = "gray", # Specify color for non-holiday
+                    setNames(rainbow(length(unique(average_crime_rate_holiday$Holiday))), 
+                             unique(average_crime_rate_holiday$Holiday))) # Assign unique colors to each holiday
+
+# Bar plot showing average crime rate for each holiday and non-holidays
+ggplot(combined_crime_rates, aes(x = Holiday, y = average_crime_rate, fill = Holiday)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = color_palette) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Crime Rates on Holidays and Non-Holiday",
+       x = "Day",
+       y = "Average Arrest Rate",
+       fill = "Holiday")
+```
+
+
+
+```{r 2}
+#Weapons#
+# Join data
+dc <- left_join(dc, select(holidays, Date, Name), by = c("Arrest.Date" = "Date"))
+dc <- mutate(dc, Holiday = if_else(is.na(Name), "Non-Holiday", Name))
+
+# Define specific holidays and non-holiday category
+dc$Holiday_Specific <- ifelse(dc$Holiday %in% c("Memorial Day", "Independence Day", "Christmas Day"), dc$Holiday, 
+                              ifelse(dc$Holiday == "Non-Holiday", "Non-Holiday", "Other Holiday"))
+
+# Exclude and simplify categories in Arrest.Weapon
+dc <- dc %>%
+  filter(!Arrest.Weapon %in% c("None", "Unarmed", "Drugs")) %>%
+  mutate(Arrest.Weapon = case_when(
+    Arrest.Weapon %in% c("Gun", "Handgun", "Firearm", "Other Firearm", "Shotgun", "Firearm (Type Not Stated)") ~ "Firearm",
+    Arrest.Weapon %in% c("Knife - Butcher", "Knife - Other", "Knife - Pocket") ~ "Knife",
+    TRUE ~ Arrest.Weapon
+  ))
+
+# Filter for relevant holidays
+specific_days <- dc %>%
+  filter(Holiday_Specific %in% c("Memorial Day", "Independence Day", "Christmas Day", "Non-Holiday"))
+
+# Analyze weapon use by holiday
+weapons_analysis <- dc %>%
+  group_by(Holiday, Arrest.Weapon, Arrest.Date) %>%
+  summarise(Crimes_Per_Day = n(), .groups = 'drop')
+
+# Determine top three arrest types
+top_arrest_types <- weapons_analysis %>%
+  group_by(Arrest.Weapon) %>%
+  summarise(Total_Crimes = sum(Crimes_Per_Day), .groups = 'drop') %>%
+  arrange(desc(Total_Crimes)) %>%
+  slice_max(order_by = Total_Crimes, n = 3)
+
+# Loop over top three arrest types and create a separate plot for each
+for (weapon_type in top_arrest_types$Arrest.Weapon) {
+  # Filter weapons analysis for the current weapon type
+  weapons_analysis_current <- filter(weapons_analysis, Arrest.Weapon == weapon_type)
+  
+  # Create a box plot for the current weapon type
+  plot <- ggplot(weapons_analysis_current, aes(x = Holiday, y = Crimes_Per_Day, fill = Holiday)) +
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = paste("Crime Rates on Holidays and Non-holiday by", weapon_type),
+         x = "Day",
+         y = "Arrest Rate",
+         fill = "Holiday")
+  
+  # Display the plot
+  print(plot)
+  
+  # Calculate and display median crime rates for each holiday
+  median_rates <- weapons_analysis_current %>%
+    group_by(Holiday) %>%
+    summarise(Median_Crimes_Per_Day = median(Crimes_Per_Day))
+  
+  print(knitr::kable(median_rates, row.names = FALSE))
+  cat("\n")
+  
+  # Calculate sample sizes for each holiday and non-holiday group
+  sample_sizes <- weapons_analysis_current %>%
+    group_by(Holiday) %>%
+    summarise(Sample_Size = n())
+  
+  print(knitr::kable(sample_sizes, row.names = FALSE))
+  cat("\n")
+  
+  cat("Hypothesis Testing for", weapon_type, "\n")
+  cat("------------------------------------\n")
+  
+  # Perform hypothesis testing for each holiday compared to non-holiday
+  holidays <- unique(weapons_analysis_current$Holiday)
+  holidays <- holidays[holidays != "Non-Holiday"]
+  
+  for (holiday in holidays) {
+    holiday_data <- weapons_analysis_current[weapons_analysis_current$Holiday == holiday, ]
+    non_holiday_data <- weapons_analysis_current[weapons_analysis_current$Holiday == "Non-Holiday", ]
+    
+    # Check if there are sufficient data points for both holiday and non-holiday
+    if (nrow(holiday_data) >= 2 && nrow(non_holiday_data) >= 2) {
+      test_result <- t.test(holiday_data$Crimes_Per_Day, non_holiday_data$Crimes_Per_Day)
+      
+      cat("Hypothesis Testing for", holiday, "vs. Non-Holiday:\n")
+      cat("t-statistic:", test_result$statistic, "\n")
+      cat("p-value:", test_result$p.value, "\n")
+      cat("Confidence Interval:", test_result$conf.int[1], "-", test_result$conf.int[2], "\n")
+      cat("\n")
+    } else {
+      cat("Insufficient data points for", holiday, "or Non-Holiday. Skipping hypothesis test.\n\n")
+    }
+  }
+  
+  cat("\n")
+}
+
+# Summary statistics
+weapons_analysis %>%
+  group_by(Holiday, Arrest.Weapon) %>%
+  summarise(
+    Min_Crimes_Per_Day = min(Crimes_Per_Day),
+    First_Quartile = quantile(Crimes_Per_Day, 0.25),
+    Median_Crimes_Per_Day = median(Crimes_Per_Day),
+    Third_Quartile = quantile(Crimes_Per_Day, 0.75),
+    Max_Crimes_Per_Day = max(Crimes_Per_Day),
+    .groups = 'drop'
+  )
+```
+
+```{r 3}
+#Drug#
+dc <- read.csv("C:/Users/yeyou/OneDrive/Desktop/dallas_crimes.csv", header = TRUE, stringsAsFactors = FALSE)
+holidays <- read.csv("C:/Users/yeyou/OneDrive/Desktop/holidays.csv")
+
+# Clean and prepare data
+dc <- na.omit(dc)
+dc$Arrest.Date <- as.Date(dc$Arrest.Date, "%m/%d/%Y")
+holidays$Date <- as.Date(holidays$Date, "%m/%d/%Y")
+
+# Join
+dc <- left_join(dc, select(holidays, Date, Name), by = c("Arrest.Date" = "Date"))
+dc <- mutate(dc, Holiday = if_else(is.na(Name), "Non-Holiday", Name))
+
+# Filter for drug-related crimes and exclude "Unknown" values
+drug_related_crimes <- dc %>%
+  filter(Drug.Related == "Yes" & !is.na(Drug.Type)) %>%
+  mutate(Drug.Type = case_when(
+    Drug.Type %in% c("Cultivated Marijuana", "Processed Marijuana") ~ "Marijuana",
+    Drug.Type %in% c("Crack Cocaine", "Powder Cocaine") ~ "Cocaine",
+    Drug.Type %in% c("Methamphetamine") ~ "Meth",
+    TRUE ~ Drug.Type
+  ))
+
+# Calculate crime rates for each drug type on specific days
+drug_type_rates <- drug_related_crimes %>%
+  group_by(Holiday, Drug.Type) %>%
+  summarise(Total_Crimes = n(),
+            Days = n_distinct(Arrest.Date),
+            Crime_Rate = Total_Crimes / Days, .groups = 'drop') %>%
+  filter(Holiday %in% c("Memorial Day", "Independence Day", "Christmas Day", "Non-Holiday"))
+
+# drug analysis
+drug_analysis <- drug_related_crimes %>% 
+  group_by(Holiday, Drug.Type, Arrest.Date) %>%
+  summarise(Crimes_Per_Day = n(), .groups = 'drop')
+
+# Determine top three drug types
+top_drug <- drug_analysis %>%
+  group_by(Drug.Type) %>%
+  summarise(Total_Crimes = sum(Crimes_Per_Day), .groups = 'drop') %>%
+  arrange(desc(Total_Crimes)) %>%
+  slice_max(order_by = Total_Crimes, n = 3)
+
+# Iterate over the top three drug types and generate plots
+plot_list <- list()
+
+for (drug_type in top_drug$Drug.Type){
+  drug_analysis_current <- filter(drug_analysis, Drug.Type == drug_type)
+  plot <- ggplot(drug_analysis_current, aes(x = Holiday, y = Crimes_Per_Day, fill = Holiday)) +
+    geom_boxplot() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(title = paste("Crime Rates for", drug_type, "on Holidays and Non-holiday"),
+         x = "Day",
+         y = "Daily Arrest Rate",
+         fill = "Holiday")
+  plot_list[[drug_type]] <- plot
+}
+
+for (drug_type in names(plot_list)) {
+  print(plot_list[[drug_type]])
+}
+
+
+
+
+
+
+  
+
+
+
+
+
+```
